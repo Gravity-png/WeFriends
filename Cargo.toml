@@ -1,0 +1,14 @@
+[package]
+name = "WeFriends"
+version = "0.0.1"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+egui = "0.30.0"
+eframe = "0.30.0"
+egui-modal = "0.6.0"
+
+[build-dependencies]
+winres = "0.1"
+winapi = { version = "0.3", features = ["winnt"] }
