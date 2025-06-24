@@ -1,6 +1,7 @@
 use egui;
 use egui_modal::Modal;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use chrono::Local;
 
 fn main() -> Result<(), eframe::Error> {
     // 创建视口选项，设置视口的内部大小为800x600像素
@@ -36,10 +37,17 @@ fn main() -> Result<(), eframe::Error> {
     )
 }
 
-struct MyApp {
+
+#[derive(Clone)]
+pub struct MyApp {
     nickname: String,
     wxid: String,
-    abnormal_friends: Vec<(String, String)>,
+    total_friends: usize,
+    deleted_me: usize,
+    blocked_me: usize,
+    logs: Arc<Mutex<Vec<String>>>,
+    port: Option<u16>,
+    confirm_login: bool,
 }
 
 impl Default for MyApp {
@@ -47,14 +55,30 @@ impl Default for MyApp {
         Self {
             nickname: "张三".to_owned(),
             wxid: "123456".to_owned(),
-            abnormal_friends: vec![
-                ("wxid_1".to_owned(), "拉黑".to_owned()),
-                ("wxid_2".to_owned(), "删除".to_owned()),
-                ("wxid_3".to_owned(), "对方账号异常".to_owned()),
-                ("wxid_4".to_owned(), "检测失败".to_owned()),
-                ("wxid_5".to_owned(), "---".to_owned()),
-            ],
+            total_friends: 150,
+            deleted_me: 5,
+            blocked_me: 3,
+            logs: Arc::new(Mutex::new(vec![
+                "欢迎使用WeFriends——开源、免费的微信好友关系检测工具".to_string(),
+                "开发者:StrayMeteor3337".to_string(),
+            ])),
+            port: None,
+            confirm_login: false,
         }
+    }
+}
+
+
+/// 日志函数，向日志栏输出日志信息
+pub fn log_message(app: &mut MyApp, message: &str) {
+    let now = Local::now();
+    let log_entry = format!("[{}] {}", now.format("%Y-%m-%d %H:%M:%S"), message);
+    let mut logs = app.logs.lock().unwrap();
+    logs.push(log_entry);
+    
+    // 限制日志数量
+    if logs.len() > 100 {
+        logs.remove(0);
     }
 }
 
@@ -76,6 +100,28 @@ impl eframe::App for MyApp {
             });
         });
 
+        // 构建模态窗口内容,此窗口在启动微信之前提醒用户注意事项
+        let login_tip_dialog = Modal::new(ctx, "login_tip");
+        
+        login_tip_dialog.show(|ui| {
+            login_tip_dialog.title(ui, "注意");
+
+            login_tip_dialog.frame(ui, |ui| {
+                login_tip_dialog.body(ui, "请等待系统日志中输出hook成功的提示后再登录微信,不然会提示版本过低");
+            });
+
+            login_tip_dialog.buttons(ui, |ui| {
+                if login_tip_dialog.button(ui, "确定").clicked() {
+                    self.confirm_login = true;
+                    login_tip_dialog.close();
+                }
+                if login_tip_dialog.button(ui, "取消").clicked() {
+                    login_tip_dialog.close();
+                }
+            });
+        });
+
+
         // 顶部标题
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.heading("WeFriends主程序——微信好友检测");
@@ -96,9 +142,37 @@ impl eframe::App for MyApp {
                     // 启动微信按钮
                     let b1 = egui::Button::new("登录微信").min_size(button_size);
                     if ui.add(b1).clicked() {
+                        login_tip_dialog.open();
+                    }
+                    
+                    // 处理登录确认
+                    if self.confirm_login {
+                        self.confirm_login = false;
                         // 启动WeChat.exe, 警告: 这会先杀死所有正在运行的微信进程
                         let _ = WeFriends::wechat_manager::kill_wechat();
-                        let _ = WeFriends::wechat_manager::start_wechat();
+                        let ctx = ctx.clone();
+                        let app = self.clone();
+                        
+                        // 使用tokio运行时执行异步任务
+                        std::thread::spawn(move || {
+                            tokio::runtime::Runtime::new()
+                                .unwrap()
+                                .block_on(async {
+                                    match WeFriends::wechat_manager::login_wechat().await {
+                                        Ok(port) => {
+                                            let mut app = app.clone();
+                                            app.port = Some(port);
+                                            log_message(&mut app, &format!("hook微信成功，监听端口: {}", port));
+                                            ctx.request_repaint();
+                                        }
+                                        Err(e) => {
+                                            let mut app = app.clone();
+                                            log_message(&mut app, &format!("hook微信出错: {}", e));
+                                            ctx.request_repaint();
+                                        }
+                                    }
+                                });
+                        });
                     }
 
                     // 按钮之间添加间距
@@ -139,58 +213,28 @@ impl eframe::App for MyApp {
 
         // 主内容区域（右侧）
         egui::CentralPanel::default().show(ctx, |ui| {
-            egui::containers::Frame::default()
-                .inner_margin(egui::Margin::same(8.0))
-                .show(ui, |ui| {
-                    // 列表标题
-                    ui.heading("📋 异常好友列表");
-                    ui.separator();
-
-                    // 带滚动条的可扩展列表
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, true])
-                        .max_height(ui.available_height())
-                        .show(ui, |ui| {
-                            egui::Grid::new("friends_grid")
-                                .striped(true)
-                                .spacing([20.0, 8.0])
-                                .min_col_width(250.0)
-                                .show(ui, |ui| {
-                                    // 表头
-                                    ui.strong("好友账号ID");
-                                    ui.strong("好友状态");
-                                    ui.end_row();
-
-                                    for (friend_wxid, friend_status) in &self.abnormal_friends {
-                                        ui.label(
-                                            egui::RichText::new(friend_wxid)
-                                                .text_style(egui::TextStyle::Body),
-                                        );
-
-                                        let (color, text) = match friend_status.as_str() {
-                                            "已完成" => (
-                                                egui::Color32::from_rgb(46, 204, 113),
-                                                "✔ 已完成",
-                                            ),
-                                            "拉黑" => (
-                                                egui::Color32::from_rgb(52, 152, 219),
-                                                "拉黑",
-                                            ),
-                                            "删除" => (
-                                                egui::Color32::from_rgb(231, 76, 60),
-                                                "删除",
-                                            ),
-                                            _ => (egui::Color32::GRAY, friend_status.as_ref()),
-                                        };
-
-                                        ui.colored_label(color, text)
-                                            .on_hover_text("双击查看详情");
-
-                                        ui.end_row();
-                                    }
-                                });
-                        });
-                });
+            ui.vertical(|ui| {
+                ui.heading("📊 好友统计");
+                ui.separator();
+                ui.add_space(10.0);
+                ui.label(egui::RichText::new(format!("好友总数: {}", self.total_friends)).size(24.0));
+                ui.label(egui::RichText::new(format!("删除我的人: {}", self.deleted_me)).size(24.0));
+                ui.label(egui::RichText::new(format!("拉黑我的人: {}", self.blocked_me)).size(24.0));
+                
+                // 日志控制台
+                ui.separator();
+                ui.add_space(10.0);
+                ui.heading("系统日志: ");
+                egui::ScrollArea::vertical()
+                    .max_height(200.0)
+                    .show(ui, |ui| {
+                        if let Ok(logs) = self.logs.lock() {
+                            for log in logs.iter() {
+                                ui.label(log);
+                            }
+                        }
+                    });
+            });
         });
     }
 
