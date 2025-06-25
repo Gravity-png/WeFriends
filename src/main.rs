@@ -1,6 +1,7 @@
 use egui;
 use egui_modal::Modal;
-use std::sync::{Arc, Mutex};
+use tokio::time;
+use std::{sync::{Arc, Mutex}, time::Duration};
 use chrono::Local;
 
 fn main() -> Result<(), eframe::Error> {
@@ -20,8 +21,8 @@ fn main() -> Result<(), eframe::Error> {
             // 添加中文字体，并使用 Arc 包装
             fonts.font_data.insert(
                 "my_font".to_owned(),
-                //PS: 这个字体文件貌似有点大，以后精简一下
-                Arc::new(egui::FontData::from_static(include_bytes!("NotoSansSC-Regular.ttf"))),
+                //PS: 源文件在https://fonts.google.com/noto/specimen/Noto+Sans+SC ,这个是精简过的,原来的太大了
+                Arc::new(egui::FontData::from_static(include_bytes!("NotoSansSC-Regular-3500.ttf"))),
             );
 
             // 设置默认字体
@@ -40,8 +41,9 @@ fn main() -> Result<(), eframe::Error> {
 
 #[derive(Clone)]
 pub struct MyApp {
-    nickname: String,
-    wxid: String,
+    nickname: Arc<Mutex<String>>,
+    wxid: Arc<Mutex<String>>,
+    wxsign: Arc<Mutex<String>>,
     total_friends: usize,
     deleted_me: usize,
     blocked_me: usize,
@@ -53,11 +55,12 @@ pub struct MyApp {
 impl Default for MyApp {
     fn default() -> Self {
         Self {
-            nickname: "张三".to_owned(),
-            wxid: "123456".to_owned(),
-            total_friends: 150,
-            deleted_me: 5,
-            blocked_me: 3,
+            nickname: Arc::new(Mutex::new("微信未登录".to_owned())),
+            wxid: Arc::new(Mutex::new("微信未登录".to_owned())),
+            wxsign: Arc::new(Mutex::new("微信未登录".to_owned())),
+            total_friends: 0,
+            deleted_me: 0,
+            blocked_me: 0,
             logs: Arc::new(Mutex::new(vec![
                 "欢迎使用WeFriends——开源、免费的微信好友关系检测工具".to_string(),
                 "开发者:StrayMeteor3337".to_string(),
@@ -107,7 +110,7 @@ impl eframe::App for MyApp {
             login_tip_dialog.title(ui, "注意");
 
             login_tip_dialog.frame(ui, |ui| {
-                login_tip_dialog.body(ui, "请等待系统日志中输出hook成功的提示后再登录微信,不然会提示版本过低");
+                login_tip_dialog.body(ui, "请等待系统日志中输出修改微信版本成功的提示后再登录微信,不然会提示版本过低");
             });
 
             login_tip_dialog.buttons(ui, |ui| {
@@ -149,7 +152,8 @@ impl eframe::App for MyApp {
                     if self.confirm_login {
                         self.confirm_login = false;
                         // 启动WeChat.exe, 警告: 这会先杀死所有正在运行的微信进程
-                        let _ = WeFriends::wechat_manager::kill_wechat();
+                        //let _ = WeFriends::wechat_manager::kill_wechat();
+                        log_message(self,"启动hook可能需要一会,请耐心等待");
                         let ctx = ctx.clone();
                         let app = self.clone();
                         
@@ -163,6 +167,59 @@ impl eframe::App for MyApp {
                                             let mut app = app.clone();
                                             app.port = Some(port);
                                             log_message(&mut app, &format!("hook微信成功，监听端口: {}", port));
+
+                                            //不手动更新的话要等半天才会显示日志
+                                            ctx.request_repaint();
+
+                                            // 修改微信版本号,同时也算测试和hook模块的通信
+                                            time::sleep(Duration::from_secs(1)).await;
+                                            if let Err(e) = WeFriends::wechat_controller::overwrite_wechat_version(port, "3.9.12.51").await {
+                                                log_message(&mut app, &format!("覆写微信版本号失败,必须退出微信重试,否则你将无法登录: {}", e));
+                                                ctx.request_repaint();
+                                            } else {
+                                                log_message(&mut app, "已修改微信版本号为3.9.12.51,请登录微信");
+                                                ctx.request_repaint();
+                                                
+                                                // 循环检测微信登录状态
+                                                loop {
+                                                    time::sleep(Duration::from_secs(1)).await;
+                                                    match WeFriends::wechat_controller::check_wechat_login(port).await {
+                                                        Ok(true) => {
+                                                            log_message(&mut app, "微信已登录");
+                                                            ctx.request_repaint();
+                                                            
+                                                            //登录以后获取账号信息
+                                                            match WeFriends::wechat_controller::get_wechat_profile(port).await {
+                                                                Ok(profile) => {
+                                                                    let nickname = profile["data"]["wxNickName"].as_str().unwrap_or("").to_string();
+                                                                    let wxid = profile["data"]["wxId"].as_str().unwrap_or("").to_string();
+                                                                    let wxsign = profile["data"]["wxSignature"].as_str().unwrap_or("").to_string();
+                                                                    
+                                                                    *app.nickname.lock().unwrap() = nickname;
+                                                                    *app.wxid.lock().unwrap() = wxid;
+                                                                    *app.wxsign.lock().unwrap() = wxsign;
+                                                                    
+                                                                    
+                                                                    log_message(&mut app, "获取账号信息成功");
+
+                                                                    ctx.request_repaint();
+                                                                }
+                                                                Err(e) => {
+                                                                    log_message(&mut app, &format!("获取账号信息出错: {}", e));
+                                                                }
+                                                            }
+
+                                                            break;
+                                                        }
+                                                        Ok(false) => continue,
+                                                        Err(e) => {
+                                                            log_message(&mut app, &format!("检测登录状态出错: {}", e));
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            
                                             ctx.request_repaint();
                                         }
                                         Err(e) => {
@@ -206,8 +263,9 @@ impl eframe::App for MyApp {
                     ui.heading("👤 用户信息");
                     ui.separator();
                     ui.add_space(10.0);
-                    ui.label(format!("昵称：{}", self.nickname));
-                    ui.label(format!("账号ID：{}", self.wxid));
+                    ui.label(format!("昵称：{}", self.nickname.lock().unwrap()));
+                    ui.label(format!("账号：{}", self.wxid.lock().unwrap()));
+                    ui.label(format!("签名：{}", self.wxsign.lock().unwrap()))
                 });
             });
 

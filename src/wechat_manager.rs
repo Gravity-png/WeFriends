@@ -115,6 +115,7 @@ pub async fn login_wechat() -> Result<u16> {
     };
     
     // 生成49153-65534之间的随机端口
+    #[allow(deprecated)]
     let port: i32 = rand::thread_rng().gen_range(49153..=65534);
     
     // 非阻塞等待5秒
