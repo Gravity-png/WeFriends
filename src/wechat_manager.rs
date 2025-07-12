@@ -211,3 +211,31 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+/// 清空缓存,就是把install_wechat复制的微信客户端删了
+pub fn clear_cache() -> Result<()> {
+    // 获取LocalAppData路径
+    let local_app_data = std::env::var("LocalAppData")
+        .context("无法获取LocalAppData路径")?;
+
+    // 构建目标路径
+    let target_path = Path::new(&local_app_data)
+        .join("Tencent")
+        .join("WeChat");
+
+    println!("尝试删除微信缓存目录: {}", target_path.display());
+    
+    // 删除WeChat目录（如果存在）
+    if Path::new(&target_path).exists() {
+        match fs::remove_dir_all(&target_path) {
+            Ok(_) => println!("成功删除微信缓存目录"),
+            Err(e) => {
+                eprintln!("删除目录失败: {}", e);
+                return Err(anyhow::anyhow!("删除目录失败: {}", e));
+            }
+        }
+    } else {
+        println!("微信缓存目录不存在，无需删除");
+    }
+    Ok(())
+}

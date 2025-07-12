@@ -32,3 +32,17 @@ pub fn filter_wxid_items(items: Vec<Value>) -> Vec<Value> {
         })
         .collect()
 }
+
+/// 从官网api获取数据,用于检查更新和获取公告(暂时没有)与changelog功能
+/// 这不会上传用户的隐私信息
+pub async fn get_api_data() -> Result<serde_json::Value, reqwest::Error> {
+    println!("正在访问api");
+    const APP_API: &str = "https://we.freespace.host/wf/v1/app.json";
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .user_agent("WeFriends-app")
+        .build()?;
+    
+    let resp = client.get(APP_API).send().await?;
+    resp.json::<serde_json::Value>().await
+}

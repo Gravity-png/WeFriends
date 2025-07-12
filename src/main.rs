@@ -23,7 +23,7 @@ fn main() -> Result<(), eframe::Error> {
             fonts.font_data.insert(
                 "my_font".to_owned(),
                 //PS: 源文件在https://fonts.google.com/noto/specimen/Noto+Sans+SC ,这个是精简过的,原来的太大了
-                Arc::new(egui::FontData::from_static(include_bytes!("NotoSansSC-Regular-3500.ttf"))),
+                Arc::new(egui::FontData::from_static(include_bytes!("NotoSansSC-Regular-Lite.ttf"))),
             );
 
             // 设置默认字体
@@ -56,6 +56,8 @@ pub struct MyApp {
     confirm_login: bool,
     can_check_relation: Arc<Mutex<bool>>,
     can_set_remark: Arc<Mutex<bool>>,
+    update_checked: bool,
+    api_data: serde_json::Value,
 }
 
 impl Default for MyApp {
@@ -89,6 +91,8 @@ impl Default for MyApp {
             confirm_login: false,//登录微信对话框确认用的
             can_check_relation: Arc::new(Mutex::new(false)),//是否可以开始检测好友,获取好友列表成功之后为真,开始检测后为假
             can_set_remark: Arc::new(Mutex::new(false)),//是否可以添加备注,检测完毕后为真,添加开始后为假
+            update_checked: false,//是否完成检查更新的操作
+            api_data: json!({}),
         }
     }
 }
@@ -121,6 +125,8 @@ pub fn update_list_num_all(app: &mut MyApp, update_total:bool) {
 
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        
+
         let not_login_dialog = Modal::new(ctx, "not_login");
         // 构建模态窗口内容,此窗口在没有登录微信时点击"开始检测"按钮时弹出
         not_login_dialog.show(|ui| {
@@ -210,9 +216,57 @@ impl eframe::App for MyApp {
             });
         });
 
+        let about_dialog = Modal::new(ctx, "about");
+
+        about_dialog.show(|ui| {
+            about_dialog.title(ui, "关于WeFriends");
+
+            about_dialog.frame(ui, |ui| {
+                about_dialog.body(ui,
+                     "WeFriends-Are We Still Friends?\nWeFriends是一款开源、免费、安全的微信好友检测工具\n \n开发者: StrayMeteor3337\n几乎所有hook功能都来自大佬ljc545w的开源项目github.com/ljc545w/ComWeChatRobot,没有他就不会有WeFriends\n \nWeFriends官网: we.freespace.host\n开源仓库地址: github.com/StrayMeteor3337/WeFriends\n \n开源协议: MIT协议,虽然功能不多,这个软件还是花了我很多精力,请遵守开源协议,感谢支持"
+                    );
+            });
+
+            about_dialog.buttons(ui, |ui| {
+                if about_dialog.button(ui, "关闭").clicked() {
+                    about_dialog.close();
+                }
+                
+            });
+        });
+
         // 顶部标题
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            ui.heading("WeFriends主程序——微信好友检测");
+            ui.horizontal(|ui| {
+                ui.heading("WeFriends主程序——微信好友检测beta V0.1.0");
+                
+                // 添加设置和关于按钮
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // 关于按钮
+                    if ui.button("关于").clicked() {
+                        about_dialog.open();
+                    }
+
+                    ui.add_space(10.0);
+                    
+                    // 设置按钮
+                    ui.menu_button("设置", |ui| {
+                        if ui.button("清空缓存").clicked() {
+                            let _ = WeFriends::wechat_manager::clear_cache();
+                            log_message(self, "已清空缓存");
+                            ui.close_menu();
+                        }
+                        if ui.button("访问官网").clicked() {
+                            let _ = webbrowser::open("https://we.freespace.host");
+                            ui.close_menu();
+                        }
+                        if ui.button("访问仓库").clicked() {
+                            let _ = webbrowser::open("https://github.com/StrayMeteor3337/WeFriends");
+                            ui.close_menu();
+                        }
+                    });
+                });
+            });
         });
 
         // 底部按钮面板
@@ -574,6 +628,63 @@ impl eframe::App for MyApp {
                 });
             });
         });
+
+        if !self.update_checked {
+            // 在启动时检查更新
+            self.update_checked = true;
+                    let result = tokio::runtime::Runtime::new()
+                        .unwrap()
+                        .block_on(async {
+                            tokio::time::timeout(
+                                Duration::from_secs(5),
+                                WeFriends::util::get_api_data()
+                            ).await
+                        });
+                    
+                    match result {
+                        Ok(Ok(data)) => {
+                            let latest_version = data["latest"].as_str().unwrap_or("0.0.0");
+                            let current_version = "0.1.0";
+                    
+                            if latest_version != current_version {
+                                println!("版本过低");
+                                self.api_data = data;
+                            } else {
+                                log_message(self, "当前已是最新版本");
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            log_message(self, &format!("检查更新失败: {}", e));
+                        }
+                        Err(_) => {
+                            log_message(self, "检查更新超时");
+                        }
+                    }
+        }
+
+        //检查更新弹窗逻辑
+        if !self.api_data["latest"].is_null(){
+            let dialog = Modal::new(ctx, "app_outdated");
+                        
+            dialog.show(|ui| {
+                dialog.title(ui, "版本已过时");
+                dialog.frame(ui, |ui| {
+                    dialog.body(ui, &format!(
+                        "最新版本: {}\n\n更新内容:\n{}\n \n当前为beta测试版本,已启用强制更新,将在正式版中移除",
+                        self.api_data["latest"], self.api_data["changelog"]
+                    ));
+                });
+                dialog.buttons(ui, |ui| {
+                    if dialog.button(ui, "去官网下载").clicked() {
+                        let _ = webbrowser::open("https://we.freespace.host");
+                    }
+                    if dialog.button(ui, "去仓库下载").clicked() {
+                        let _ = webbrowser::open("https://github.com/StrayMeteor3337/WeFriends/releases");
+                    }
+                });
+            });
+            dialog.open();
+        }
     }
 
 }
