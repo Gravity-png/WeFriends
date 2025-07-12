@@ -38,23 +38,41 @@ pub fn kill_wechat() -> io::Result<()> {
 /// 注意,不要直接调用这个,调用login_wechat实现启动+注入hook
 fn start_wechat() -> io::Result<()> {
     #[cfg(target_os = "windows")] {
-        let paths = [
-            r"D:\WeFriends\WeChat.exe",
-            //r"D:\Program Files (x86)\Tencent\WeChat\WeChat.exe",
-            //r"D:\Program Files\Tencent\Weixin\WeChat.exe",
-        ];
+        // 检查LocalAppData路径下的微信,正常这里应该存在微信
+        if let Ok(local_app_data) = std::env::var("LocalAppData") {
+            let wechat_path = Path::new(&local_app_data)
+                .join("Tencent")
+                .join("WeChat");
+            
+            // 检查版本目录是否存在
+            let version_dir = wechat_path.join("[3.7.0.30]");
+            if version_dir.exists() {
+                let exe_path = wechat_path.join("WeChat.exe");
+                if exe_path.exists() {
+                    return Command::new(exe_path)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .creation_flags(0x00000008 | 0x08000000)
+                        .spawn()
+                        .map(|_| ());
+                }
+            }
+        }
 
-        for path in &paths {
-            match Command::new(path)
+        // 检查Client目录下的微信
+        let client_path = Path::new("Client").join("WeChat.exe");
+        println!("客户端路径: {}",client_path.display());
+        
+        if client_path.exists() {
+            println!("直接启动微信,可能之前安装失败");
+            return Command::new(client_path)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .creation_flags(0x00000008 | 0x08000000)
-                .spawn() 
-            {
-                Ok(_) => return Ok(()),
-                Err(_e) => continue,
-            }
+                .spawn()
+                .map(|_| ());
         }
+        
         Err(io::Error::new(io::ErrorKind::NotFound, "WeChat executable not found"))
     }
     #[cfg(not(target_os = "windows"))] {
@@ -123,4 +141,73 @@ pub async fn login_wechat() -> Result<u16> {
 
     let port = hook_wechat(pid,port).context("Hook微信失败,请重试,否则所有操作都将无效")?;
     Ok(port as u16)
+}
+
+use std::fs;
+use std::path::Path;
+
+pub async fn install_wechat() -> Result<()> {
+    // 获取LocalAppData路径
+    let local_app_data = std::env::var("LocalAppData")
+        .context("无法获取LocalAppData路径")?;
+
+    // 检查WeChatWin.dll是否存在
+    println!("LocalAppData: {}",local_app_data);
+
+    // 检查WeChatWin.dll是否存在
+    let dll_path = Path::new(&local_app_data)
+        .join("Tencent")
+        .join("WeChat")
+        .join("[3.7.0.30]")
+        .join("WeChatWin.dll");
+    
+    println!("dll_path: {}", dll_path.display());
+
+    if dll_path.exists() {
+        return Ok(()); // 文件已存在，不执行操作
+    }
+
+    // 构建目标路径
+    let target_path = Path::new(&local_app_data)
+        .join("Tencent")
+        .join("WeChat");
+
+    println!("target_path: {}", target_path.display());
+    
+
+    // 删除WeChat目录（如果存在）
+    if Path::new(&target_path).exists() {
+        fs::remove_dir_all(&target_path)
+            .context(format!("删除目录失败: {}", target_path.display()))?;
+    }
+
+    // 创建目标目录
+    fs::create_dir_all(&target_path)
+        .context(format!("创建目录失败: {}", target_path.display()))?;
+    
+    time::sleep(Duration::from_secs(3)).await;
+
+    // 复制Client目录内容（如果存在）
+    let client_path = Path::new("Client");
+    if client_path.exists() {
+        println!("copying");
+        copy_dir_all(client_path, Path::new(&target_path))
+            .context("复制文件失败")?;
+        
+    }
+    Ok(())
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
+        } else {
+            fs::copy(entry.path(), dst.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
 }

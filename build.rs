@@ -10,10 +10,13 @@ fn main() {
         // 可选：设置图标
         // res.set_icon("icon.ico");
         
-        // 可选：设置版本信息
-        //res.set("ProductName", "My Application");
-        res.set("FileDescription", "WeCheck主程序");
-        // res.set("LegalCopyright", "Copyright © 2023");
+        res.set("ProductName", "WeFriends开源微信好友检测工具");
+        res.set("ProductVersion", "0.1.0");
+        
+        res.set("FileDescription", "WeFriends主程序");
+        res.set("FileVersion", "0.1.0.0");
+
+        res.set("LegalCopyright", "Copyright © 2025 StrayMeteor3337");
         
         res.compile().unwrap();
     }
