@@ -30,7 +30,7 @@ WeFriends具有以下优点:
 
 ### 软件截图
 
-![主界面](https://gitee.com/StrayMeteor3337/strayImg/raw/master/WFmainUI.png)
+![主界面](https://we.freespace.host/WFmainUI.png)
 
 主界面
 
