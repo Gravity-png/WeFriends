@@ -1,3 +1,4 @@
+#![windows_subsystem = "windows"]
 use egui;
 use egui_modal::Modal;
 use tokio::time;
