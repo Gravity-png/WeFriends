@@ -1,3 +1,6 @@
+### WeFriends发现严重问题，会导致对方免验证的异常好友收到提示且会打乱手机端聊天记录的顺序，暂时无法解决，但您可以继续使用本软件(看软件内提示)
+打算换hook的接口了,把自动发好友请求变成拉群(反正肯定是hook,现在协议秒封)
+
 <h2 align="center">WeFriends</h2>
 <h4 align="center">Are we still friends?</h4>
 
