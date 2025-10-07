@@ -54,6 +54,8 @@ void dealVerifyUserResult(DWORD result)
     if (result < 0xB0 || result > 0xB5)
         return;
     LocalFriendStatus = result;
+    //≤‚ ‘
+    printf("####### Friend status:0x%02X\n",LocalFriendStatus);
 }
 
 /*

@@ -143,6 +143,45 @@ pub async fn login_wechat() -> Result<u16> {
     Ok(port as u16)
 }
 
+pub fn unhook_wechat() -> Result<bool> {
+    // 获取微信进程PID,如果未检测到微信进程就重试
+    let pid = loop {
+        let output = Command::new("tasklist")
+            .args(&["/FI", "IMAGENAME eq WeChat.exe", "/FO", "CSV", "/NH"])
+            .output()
+            .context("执行tasklist命令失败")?;
+        
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(line) = stdout.lines().next() {
+                if let Some(pid_str) = line.split(',').nth(1) {
+                    if let Ok(pid) = pid_str.trim_matches('"').parse::<DWORD>() {
+                        break pid;
+                    }
+                }
+            }
+        }
+    };
+    unsafe {
+        // 加载 DLL 文件（请确保 example.dll 在运行路径下）
+        let lib = Library::new("wxdriver64.dll")?;
+        // 获取函数指针
+        let func: Symbol<unsafe extern "C" fn(DWORD) -> BOOL> = lib.get(b"stop_listen")?;
+
+        // 设置参数并调用函数
+        let result = func(pid);
+
+        // 输出结果
+        if result != 0 {
+            println!("卸载DLL成功");
+            Ok(true)
+        } else {
+            println!("卸载DLL失败");
+            Err(anyhow::anyhow!("卸载DLL失败"))
+        }
+    }
+}
+
 use std::fs;
 use std::path::Path;
 

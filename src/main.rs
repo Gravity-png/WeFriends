@@ -3,8 +3,10 @@ use egui;
 use egui_modal::Modal;
 use tokio::time;
 use serde_json::json;
+use WeFriends::{util::wxid_json2vec, wechat_controller,util};
 use std::{sync::{Arc, Mutex}, time::Duration};
 use chrono::Local;
+use rand::Rng;
 
 fn main() -> Result<(), eframe::Error> {
     // 创建视口选项，设置视口的内部大小为800x600像素
@@ -49,16 +51,21 @@ pub struct MyApp {
     contact_list: Arc<Mutex<serde_json::Value>>,//ui更新时不会访问
     deleted_me_list: Arc<Mutex<serde_json::Value>>,//ui更新时不会访问
     blocked_me_list: Arc<Mutex<serde_json::Value>>,//ui更新时不会访问
-    total_friends: Arc<Mutex<usize>>,
-    deleted_me: Arc<Mutex<usize>>,
-    blocked_me: Arc<Mutex<usize>>,
+    total_friends: Arc<Mutex<usize>>,//显示数值
+    abnormal_friends_list: Arc<Mutex<Vec<String>>>,//ui更新时不会访问
+    abnormal_friends: Arc<Mutex<usize>>,//显示数值
+    deleted_me: Arc<Mutex<usize>>,//显示数值
+    blocked_me: Arc<Mutex<usize>>,//显示数值
     logs: Arc<Mutex<Vec<String>>>,
     port: Arc<Mutex<u16>>,
+    chatroom_id: Arc<Mutex<String>>,
+    chatroom_selected: bool,
     confirm_login: bool,
     can_check_relation: Arc<Mutex<bool>>,
     can_set_remark: Arc<Mutex<bool>>,
     update_checked: bool,
     api_data: serde_json::Value,
+    chatroom_helper_random: u32,
 }
 
 impl Default for MyApp {
@@ -81,19 +88,24 @@ impl Default for MyApp {
              */
             deleted_me_list: Arc::new(Mutex::new(json!([]))),//删除我的人的列表
             blocked_me_list: Arc::new(Mutex::new(json!([]))),//拉黑我的人的列表
+            abnormal_friends_list: Arc::new(Mutex::new(vec![])),//异常好友列表
+            abnormal_friends: Arc::new(Mutex::new(0)),
             total_friends: Arc::new(Mutex::new(0)),//好友列表的总数
             deleted_me: Arc::new(Mutex::new(0)),//删除我的人的列表的总数
             blocked_me: Arc::new(Mutex::new(0)),//拉黑我的人的列表总数
             logs: Arc::new(Mutex::new(vec![
                 "欢迎使用WeFriends——开源、免费的微信好友关系检测工具".to_string(),
-                "开发者:StrayMeteor3337".to_string(),
+                "作者:StrayMeteor3337".to_string(),
             ])),//日志列表
             port: Arc::new(Mutex::new(1)),//和hook模块通信的端口号,ip为127.0.0.1
+            chatroom_id: Arc::new(Mutex::new("".to_owned())),//测好友关系用的群
+            chatroom_selected: false,//是否已经选择了群聊
             confirm_login: false,//登录微信对话框确认用的
             can_check_relation: Arc::new(Mutex::new(false)),//是否可以开始检测好友,获取好友列表成功之后为真,开始检测后为假
             can_set_remark: Arc::new(Mutex::new(false)),//是否可以添加备注,检测完毕后为真,添加开始后为假
             update_checked: false,//是否完成检查更新的操作
             api_data: json!({}),
+            chatroom_helper_random: 123456,//选群的时候生成的随机码
         }
     }
 }
@@ -122,12 +134,12 @@ pub fn update_list_num_all(app: &mut MyApp, update_total:bool) {
     }
     *app.deleted_me.lock().unwrap() = app.deleted_me_list.lock().unwrap().as_array().map_or(0, |v| v.len());
     *app.blocked_me.lock().unwrap() = app.blocked_me_list.lock().unwrap().as_array().map_or(0, |v| v.len());
+    *app.abnormal_friends.lock().unwrap() = app.abnormal_friends_list.lock().unwrap().len();
 }
 
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         
-
         let not_login_dialog = Modal::new(ctx, "not_login");
         // 构建模态窗口内容,此窗口在没有登录微信时点击"开始检测"按钮时弹出
         not_login_dialog.show(|ui| {
@@ -171,7 +183,7 @@ impl eframe::App for MyApp {
             check_tip_dialog.title(ui, "提示");
 
             check_tip_dialog.frame(ui, |ui| {
-                check_tip_dialog.body(ui, "检测已开始,微信聊天中会显示“你已添加了xxx”,但对方不会看到这条消息,之后会解决");
+                check_tip_dialog.body(ui, "检测已开始,");
             });
 
             check_tip_dialog.buttons(ui, |ui| {
@@ -180,7 +192,7 @@ impl eframe::App for MyApp {
                 }
             });
         });
-
+        
         let check_finished_dialog = Modal::new(ctx, "check_finished");
 
         check_finished_dialog.show(|ui| {
@@ -224,7 +236,7 @@ impl eframe::App for MyApp {
 
             about_dialog.frame(ui, |ui| {
                 about_dialog.body(ui,
-                     "WeFriends-Are We Still Friends?\nWeFriends是一款开源、免费、安全的微信好友检测工具\n \n开发者: StrayMeteor3337\n几乎所有hook功能都来自大佬ljc545w的开源项目github.com/ljc545w/ComWeChatRobot,没有他就不会有WeFriends\n \nWeFriends官网: we.freespace.host\n开源仓库地址: github.com/StrayMeteor3337/WeFriends\n \n开源协议: MIT协议,虽然功能不多,这个软件还是花了我很多精力,请遵守开源协议,感谢支持"
+                     "WeFriends-Are We Still Friends?\nWeFriends是一款开源、免费、安全的微信好友检测工具\n \n开发者: StrayMeteor3337\n所有hook功能都来自大佬ljc545w的开源项目github.com/ljc545w/ComWeChatRobot\n \nWeFriends官网: we.freespace.host\n开源仓库地址: github.com/StrayMeteor3337/WeFriends\n \n本软件基于MIT协议开源"
                     );
             });
 
@@ -236,10 +248,46 @@ impl eframe::App for MyApp {
             });
         });
 
+        let select_chatroom_dialog = Modal::new(ctx, "select_chatroom");
+
+        select_chatroom_dialog.show(|ui| {
+            select_chatroom_dialog.title(ui, "选择空群聊");
+
+            select_chatroom_dialog.frame(ui, |ui| {
+                select_chatroom_dialog.body(ui,
+                     format!("请在手机端拉一个群,然后把其他人都移出群聊(只剩自己),不要在群里发送消息,否则所有好友都会收到提示\n将这串数字添加到群聊名称中: {}",self.chatroom_helper_random)
+                    );
+            });
+
+            select_chatroom_dialog.buttons(ui, |ui| {
+                if select_chatroom_dialog.button(ui, "确定").clicked() {
+                    // Step 1: 先完成所有读取操作
+                    let result = {
+                        let guard = self.contact_list.lock().unwrap();
+                        util::select_chatroom_helper(self.chatroom_helper_random, &*guard)
+                    }; // guard 在这里被释放，不再借用 self
+
+                    // Step 2: 处理结果（此时可以安全地多次可变借用 self）
+                    match result {
+                        Some(chatroom_id) => {
+                            *self.chatroom_id.lock().unwrap() = chatroom_id;
+                        }
+                        None => {
+                            log_message(self, "群聊选择失败: 群聊名称正确吗?");
+                        }
+                    }
+                }
+
+                if select_chatroom_dialog.button(ui, "取消").clicked() {
+                    select_chatroom_dialog.close();
+                }
+            });
+        });
+
         // 顶部标题
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("WeFriends主程序——微信好友检测beta V0.1.0");
+                ui.heading("WeFriends主程序——微信好友检测beta V0.2.0");
                 
                 // 添加设置和关于按钮
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -255,6 +303,11 @@ impl eframe::App for MyApp {
                         if ui.button("清空缓存").clicked() {
                             let _ = WeFriends::wechat_manager::clear_cache();
                             log_message(self, "已清空缓存");
+                            ui.close_menu();
+                        }
+                        if ui.button("卸载DLL").clicked() {
+                            let _ = WeFriends::wechat_manager::unhook_wechat();
+                            log_message(self, "已卸载DLL");
                             ui.close_menu();
                         }
                         if ui.button("访问官网").clicked() {
@@ -425,81 +478,76 @@ impl eframe::App for MyApp {
                     // 按钮之间添加间距
                     ui.add_space(20.0);
 
-                    // 开始检测按钮
-                    let b2 = egui::Button::new("开始检测").min_size(button_size);
+                    let b2 = egui::Button::new("选择群聊").min_size(button_size);
                     if ui.add(b2).clicked() {
-                        // 处理点击事件
-                        if *self.can_check_relation.lock().unwrap() {
-                            //禁用开始检测,不然用户狂点就炸了
-                            *self.can_check_relation.lock().unwrap() = false;
+                        if *self.total_friends.lock().unwrap() != 0 {
+                            self.chatroom_helper_random = rand::thread_rng().gen_range(100_000..=999_999);
 
-                            let ctx = ctx.clone();
-                            let app = self.clone();
-
-                            // 使用tokio运行时执行异步任务
-                            std::thread::spawn(move || {
-                                tokio::runtime::Runtime::new()
-                                    .unwrap()
-                                    .block_on(async {
-                                        let mut app = app.clone();
-                                        let contact_list = app.contact_list.lock().unwrap().clone();
-                                        let port = *app.port.lock().unwrap();
-
-                                        let total = app.total_friends.lock().unwrap().clone();
-                                        let mut checked = 0;
-                                        
-                                        //遍历好友列表,查询与所有好友的关系
-                                        for wxuser in contact_list.as_array().unwrap() {
-                                            let wxid = wxuser["wxid"].as_str().unwrap();
-                                            match WeFriends::wechat_controller::check_relation(port, wxid).await {
-                                                Ok(status) => {
-                                                    if status["result"] == "OK" {
-                                                        if status["status"] == 176 {
-                                                            //被删除
-                                                            {
-                                                                let mut deleted_list = app.deleted_me_list.lock().unwrap();
-                                                                if let Some(arr) = deleted_list.as_array_mut() {
-                                                                    arr.push(wxuser.clone());
-                                                                }
-                                                            }
-                                                            update_list_num_all(&mut app, false);
-                                                        }else if status["status"] == 181 {
-                                                            //被拉黑
-                                                            {
-                                                                let mut blocked_list = app.blocked_me_list.lock().unwrap();
-                                                                if let Some(arr) = blocked_list.as_array_mut() {
-                                                                    arr.push(wxuser.clone());
-                                                                }
-                                                            }
-                                                            update_list_num_all(&mut app, false);
-                                                        }
-                                                        //正常关系(对方账号异常也算正常关系)
-
-                                                        checked+=1;
-                                                        log_message(&mut app, &format!("正在检测第{}/{}个好友",checked,total));
-                                                    } else {
-                                                        log_message(&mut app, &format!("查询好友关系时出错: 请检查网络连接"));
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    log_message(&mut app, &format!("查询好友关系时出错: {}", e));
-                                                    ctx.request_repaint();
-                                                }
-                                            }
-                                        }
-                                        //检测完毕,提示用户,这时候拉黑删除都已经添加到对应list了
-                                        *app.can_set_remark.lock().unwrap() = true;
-                                        check_finished_dialog.open();
-                                    })
-                            });
+                            select_chatroom_dialog.open();
                         } else {
                             not_login_dialog.open();
                         }
                     }
 
-                    // 按钮之间添加间距
-                    ui.add_space(20.0);
+                    let b3 = egui::Button::new("开始检测").min_size(button_size);
+                    if ui.add(b3).clicked() {
+                        // 处理点击事件
+                        if *self.can_check_relation.lock().unwrap() {
+                            if self.chatroom_selected {
+                                //禁用开始检测,不然用户狂点就炸了
+                                *self.can_check_relation.lock().unwrap() = false;
 
+                                let ctx = ctx.clone();
+                                let app = self.clone();
+
+                                // 使用tokio运行时执行异步任务
+                                std::thread::spawn(move || {
+                                    tokio::runtime::Runtime::new()
+                                        .unwrap()
+                                        .block_on(async {
+                                            let mut app = app.clone();
+                                            let contact_list = app.contact_list.lock().unwrap().clone();
+                                            let port = *app.port.lock().unwrap();
+
+                                            let total = app.total_friends.lock().unwrap().clone();
+                                            let mut checked = 0;
+                                        
+                                            //单次检测35个好友
+                                            
+                                            /*
+                                            //遍历好友列表,查询与所有好友的关系
+                                            for wxuser_data_chunk in contact_list.as_array().unwrap().chunks(35) {
+                                                let wxids = wxid_json2vec(wxuser_data_chunk);
+                                                match WeFriends::wechat_controller::check_relation(port, chatroom_id, wxids).await {
+                                                    Ok(abnormal_friends) => {
+                                                        
+                                                        //正常关系(对方账号异常也算正常关系)
+
+                                                        checked+=1;
+                                                        ctx.request_repaint();
+                                                        log_message(&mut app, &format!("正在检测第{}/{}个好友",checked,total));
+                                                    }
+                                                    Err(e) => {
+                                                        log_message(&mut app, &format!("查询好友关系时出错,请检查网络连接: {}", e));
+                                                        ctx.request_repaint();
+                                                    }
+                                                }
+                                            }
+                                            */
+                                            //检测完毕,提示用户,这时候拉黑删除都已经添加到对应list了
+                                            *app.can_set_remark.lock().unwrap() = true;
+                                            check_finished_dialog.open();
+                                        })
+                                });
+                            } else {
+                                log_message(self, &format!("请先选择群聊"));
+                            }
+                        } else {
+                            not_login_dialog.open();
+                        }
+                    }
+          
+/*
                     // 添加备注按钮
                     let b2 = egui::Button::new("添加备注").min_size(button_size);
                     if ui.add(b2).clicked() {
@@ -578,10 +626,13 @@ impl eframe::App for MyApp {
 
                             //添加完成备注,提示用户
                             all_finished_dialog.open();
+                            // 启用添加备注按钮
+                            *self.can_set_remark.lock().unwrap() = true;
                         } else {
                             log_message(self, "现在不能添加备注");
                         }
                     }
+                    */
                 });
             })
         });
@@ -608,8 +659,9 @@ impl eframe::App for MyApp {
                 ui.separator();
                 ui.add_space(10.0);
                 ui.label(egui::RichText::new(format!("好友总数: {}", *self.total_friends.lock().unwrap())).size(24.0));
-                ui.label(egui::RichText::new(format!("删除我的人: {}", *self.deleted_me.lock().unwrap())).size(24.0));
-                ui.label(egui::RichText::new(format!("拉黑我的人: {}", *self.blocked_me.lock().unwrap())).size(24.0));
+                ui.label(egui::RichText::new(format!("异常好友: {}", *self.abnormal_friends.lock().unwrap())).size(24.0));
+                //ui.label(egui::RichText::new(format!("删除我的人: {}", *self.deleted_me.lock().unwrap())).size(24.0));
+                //ui.label(egui::RichText::new(format!("拉黑我的人: {}", *self.blocked_me.lock().unwrap())).size(24.0));
                 
                 // 日志控制台
                 ui.separator();
@@ -645,7 +697,7 @@ impl eframe::App for MyApp {
                     match result {
                         Ok(Ok(data)) => {
                             let latest_version = data["latest"].as_str().unwrap_or("0.0.0");
-                            let current_version = "0.1.0";
+                            let current_version = "0.2.0";
                     
                             if latest_version != current_version {
                                 println!("版本过低");

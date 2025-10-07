@@ -1,6 +1,6 @@
 use serde_json::Value;
 /* 
-这里提一下微信的机制,不知道会不会有人看: 
+这里提一下微信的机制: 
 微信你手机的"微信"页面里面所有的内容都有wxid,这是微信识别这些内容的唯一标识
 
 >>>>好友的wxid不是微信号,wxid是你账号刚注册时的"微信号"一栏里面显示的内容,你之后改过的微信号在微信后台是另一个字段,wxid在账号注册时随机生成且不可修改,这个才是你账号的唯一凭证,微信号本质就是一个不可重复且可以用来登录和加好友的昵称
@@ -8,10 +8,6 @@ use serde_json::Value;
 微信中好友的wxid以"wxid_"开头、公众号以"gh_"开头 、群聊以"@chatroom"结尾
 还有, wxid为weixin是微信团队, filehelper是文件传输助手 ,qqmail是qq邮箱提醒的聊天, fmessage是朋友推荐消息, medianote是语音记事本, floatbottle是漂流瓶(这个功能不是早没了吗,为什么还留着)
 而微信支付,微信运动是由公众号提供的内容所以wxid格式和普通公众号相同
-
-提一些无关的:
-腾讯你明明都把所有群聊编号了而且还都加载到客户端内存里了,为什么不搞一个群聊列表功能???
-还必须“保存到通讯录”才能看到,不小心删了聊天记录群都找不到,你是故意恶心人吗!!!!???
 */
 
 
@@ -46,3 +42,47 @@ pub async fn get_api_data() -> Result<serde_json::Value, reqwest::Error> {
     let resp = client.get(APP_API).send().await?;
     resp.json::<serde_json::Value>().await
 }
+
+/// 自动选择检测好友用的群,通过随机数识别是因为用户可能有成百上千的群聊,手动选择不现实
+pub fn select_chatroom_helper(chatroom_rand: u32, contact_list: &Value) -> Option<String> {
+    let rand_str = chatroom_rand.to_string();
+
+    if let Some(items) = contact_list.as_array() {
+        for item in items {
+            // 安全获取 nickname 字段
+            if let Some(nickname) = item.get("wxNickName").and_then(|v| v.as_str()) {
+                if nickname.contains(&rand_str) && nickname.contains("@chatroom") {
+                    // 成功找到，返回 wxid 
+                    return item.get("wxid")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()); 
+                }
+            }
+        }
+    }
+    None // 没找到
+}
+
+/// 从json数组批量取出wxid放到Vec里面
+pub fn wxid_json2vec(data_chunk: &[Value]) -> Vec<String> {
+    let mut id_batch = Vec::with_capacity(data_chunk.len());
+    
+    for item in data_chunk {
+        if let Some(id_value) = item.get("wxid") {
+            id_batch.push(id_value.to_string().to_owned());
+        } else {
+            eprint!("数据格式不正确")
+        }
+    }
+    id_batch
+}
+/*
+/ 分批处理，每批最多30个
+    for chunk in data.chunks(35) {
+        // 现在 id_batch 是这一批的用户 ID 列表
+        println!("本批 {} 个 ID: {:?}", id_batch.len(), id_batch);
+        
+        // 在这里处理这批 ID，比如：
+        // send_to_api(&id_batch);
+    }
+ */
